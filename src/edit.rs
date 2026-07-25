@@ -117,7 +117,7 @@ impl SignQueue {
         for s in self.0 {
             let signed = codesign::adhoc_sign(&s.data, &s.identifier, s.entitlements.as_deref())
                 .with_context(|| format!("signing {}", s.name))?;
-            plan.put_stored(s.name, signed, MODE_EXEC);
+            plan.put(s.name, signed, MODE_EXEC);
         }
         Ok(())
     }
@@ -338,7 +338,7 @@ pub fn plan_edits<R: Read + Seek>(
                 continue;
             };
             staged.insert(n.clone(), thinned.clone());
-            plan.put_stored(n.clone(), thinned, MODE_EXEC);
+            plan.put(n.clone(), thinned, MODE_EXEC);
             report.thinned += 1;
         }
     }
@@ -395,7 +395,7 @@ pub fn plan_edits<R: Read + Seek>(
             if macho::is_macho(&f.data) {
                 to_sign.queue_staged(name, f.data);
             } else if f.exec {
-                plan.put_stored(name, f.data, MODE_EXEC);
+                plan.put(name, f.data, MODE_EXEC);
             } else {
                 plan.put(name, f.data, MODE_FILE);
             }
@@ -476,7 +476,7 @@ pub fn plan_edits<R: Read + Seek>(
             if m.replaced > 0 {
                 // Staged so a following --merge-car composes on top.
                 staged.insert(car_name.clone(), merged.clone());
-                plan.put_stored(car_name, merged, MODE_FILE);
+                plan.put(car_name, merged, MODE_FILE);
                 report.car_replaced += m.replaced;
             }
         }
@@ -533,7 +533,7 @@ pub fn plan_edits<R: Read + Seek>(
         let car = current_bytes(&staged, archive, &car_name)?;
         let (merged, m) = merge::merge_car_dir(&car, dir)?;
         if m.replaced > 0 {
-            plan.put_stored(car_name, merged, MODE_FILE);
+            plan.put(car_name, merged, MODE_FILE);
         }
         report.car_replaced = m.replaced;
         report.car_unmatched = m.unmatched;

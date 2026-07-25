@@ -2,6 +2,7 @@
 //! writer is hand-rolled because `ZipWriter::new_append` rejects duplicate
 //! names, so it cannot replace an existing entry.
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -28,7 +29,6 @@ struct Pending {
     data: Vec<u8>,
     mode: u32,
     symlink: bool,
-    store: bool,
 }
 
 #[derive(Default)]
@@ -74,31 +74,20 @@ impl EditPlan {
     }
 
     pub fn put(&mut self, name: impl Into<String>, data: Vec<u8>, mode: u32) {
-        self.push(name.into(), data, mode, false, false);
-    }
-
-    pub fn put_stored(&mut self, name: impl Into<String>, data: Vec<u8>, mode: u32) {
-        self.push(name.into(), data, mode, false, true);
+        self.push(name.into(), data, mode, false);
     }
 
     pub fn put_symlink(&mut self, name: impl Into<String>, target: impl Into<String>) {
-        self.push(
-            name.into(),
-            target.into().into_bytes(),
-            MODE_SYMLINK,
-            true,
-            true,
-        );
+        self.push(name.into(), target.into().into_bytes(), MODE_SYMLINK, true);
     }
 
-    fn push(&mut self, name: String, data: Vec<u8>, mode: u32, symlink: bool, store: bool) {
+    fn push(&mut self, name: String, data: Vec<u8>, mode: u32, symlink: bool) {
         self.entries.retain(|e| e.name != name);
         self.entries.push(Pending {
             name,
             data,
             mode,
             symlink,
-            store,
         });
     }
 
@@ -106,11 +95,11 @@ impl EditPlan {
         self.entries.iter().map(|e| e.name.as_str()).collect()
     }
 
-    fn options(&self, e: &Pending) -> SimpleFileOptions {
-        let method = if e.store {
+    fn options(&self, e: &Pending, original: Option<CompressionMethod>) -> SimpleFileOptions {
+        let method = if e.symlink {
             CompressionMethod::Stored
         } else {
-            CompressionMethod::Deflated
+            original.unwrap_or(CompressionMethod::Deflated)
         };
         let mut o = SimpleFileOptions::default()
             .compression_method(method)
@@ -145,10 +134,10 @@ impl EditPlan {
         Ok(v)
     }
 
-    fn build_edits_zip(&self) -> Result<Vec<u8>> {
+    fn build_edits_zip(&self, original: &HashMap<String, CompressionMethod>) -> Result<Vec<u8>> {
         let mut w = ZipWriter::new(Cursor::new(Vec::new()));
         for e in self.stageable_entries()? {
-            let opts = self.options(e);
+            let opts = self.options(e, original.get(&e.name).copied());
             if e.symlink {
                 let target = String::from_utf8(e.data.clone())
                     .context("symlink target is not valid UTF-8")?;
@@ -165,6 +154,16 @@ impl EditPlan {
     pub fn commit_compact(&self, original: &[u8]) -> Result<Vec<u8>> {
         let mut src = ZipArchive::new(Cursor::new(original))?;
         let mut out = ZipWriter::new(Cursor::new(Vec::new()));
+
+        let mut methods = HashMap::new();
+        for i in 0..src.len() {
+            let f = src.by_index_raw(i)?;
+            let m = match f.compression() {
+                CompressionMethod::Stored => CompressionMethod::Stored,
+                _ => CompressionMethod::Deflated,
+            };
+            methods.insert(f.name().to_owned(), m);
+        }
 
         let edited = self.edited_names();
         for i in 0..src.len() {
@@ -200,7 +199,7 @@ impl EditPlan {
             }
         }
         for e in self.stageable_entries()? {
-            let opts = self.options(e);
+            let opts = self.options(e, methods.get(&e.name).copied());
             if e.symlink {
                 let target = String::from_utf8(e.data.clone())
                     .context("symlink target is not valid UTF-8")?;
@@ -236,7 +235,7 @@ impl EditPlan {
     /// correct absolute local-header offsets.
     fn build_append_tail(&self, central: &Central, base_offset: u64) -> Result<Vec<u8>> {
         let edited = self.edited_names();
-        let mini_bytes = self.build_edits_zip()?;
+        let mini_bytes = self.build_edits_zip(&central.methods()?)?;
         let mini = parse_central_directory(&mini_bytes)?;
 
         let mut tail = Vec::new();
@@ -399,6 +398,27 @@ struct Central {
     records: Vec<CentralRecord>,
     cd_offset: u64,
     comment: Vec<u8>,
+}
+
+const METHOD_STORED: u16 = 0;
+
+fn writable_method(raw: u16) -> CompressionMethod {
+    if raw == METHOD_STORED {
+        CompressionMethod::Stored
+    } else {
+        CompressionMethod::Deflated
+    }
+}
+
+impl Central {
+    fn methods(&self) -> Result<HashMap<String, CompressionMethod>> {
+        let mut m = HashMap::with_capacity(self.records.len());
+        for rec in &self.records {
+            let h: CentralHeader = CentralHeader::read(&mut Cursor::new(&rec.raw))?;
+            m.insert(rec.name.clone(), writable_method(h.method));
+        }
+        Ok(m)
+    }
 }
 
 fn eocd_is_saturated(eocd: &Eocd) -> bool {
@@ -690,6 +710,63 @@ mod tests {
             plan.commit_compact(&ipa).is_err(),
             "compact must reject traversal"
         );
+    }
+
+    #[test]
+    fn rewriting_an_entry_preserves_its_compression() {
+        let deflated = "Payload/App.app/Frameworks/Big.framework/Big";
+        let stored = "Payload/App.app/already-stored.bin";
+        let body = b"MZ".repeat(4096);
+
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, method) in [
+            (deflated, CompressionMethod::Deflated),
+            (stored, CompressionMethod::Stored),
+        ] {
+            w.start_file(
+                name,
+                SimpleFileOptions::default().compression_method(method),
+            )
+            .unwrap();
+            w.write_all(&body).unwrap();
+        }
+        let ipa = w.finish().unwrap().into_inner();
+
+        let mut plan = EditPlan::new();
+        plan.put(deflated, body.clone(), MODE_EXEC);
+        plan.put(stored, body.clone(), MODE_FILE);
+        plan.put("Payload/App.app/brand-new.dylib", body.clone(), MODE_EXEC);
+
+        for (label, out) in [
+            ("compact", plan.commit_compact(&ipa).unwrap()),
+            ("append", plan.commit_append(&ipa).unwrap()),
+        ] {
+            let mut z = ZipArchive::new(Cursor::new(out)).unwrap();
+            let method = |z: &mut ZipArchive<Cursor<Vec<u8>>>, n: &str| {
+                let mut idx = None;
+                for i in 0..z.len() {
+                    if z.by_index_raw(i).unwrap().name() == n {
+                        idx = Some(i);
+                    }
+                }
+                z.by_index_raw(idx.unwrap()).unwrap().compression()
+            };
+            assert_eq!(
+                method(&mut z, deflated),
+                CompressionMethod::Deflated,
+                "{label}: a deflated entry must stay deflated when rewritten"
+            );
+            assert_eq!(
+                method(&mut z, stored),
+                CompressionMethod::Stored,
+                "{label}: a stored entry must stay stored when rewritten"
+            );
+            assert_eq!(
+                method(&mut z, "Payload/App.app/brand-new.dylib"),
+                CompressionMethod::Deflated,
+                "{label}: a new file should deflate like the rest of the bundle"
+            );
+        }
     }
 
     #[test]

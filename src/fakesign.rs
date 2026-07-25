@@ -58,7 +58,7 @@ pub fn fakesign_ipa(ipa: &[u8], opts: &EditOptions, mode: &WriteMode) -> Result<
         if name.ends_with("/CodeResources") || name.contains("/_CodeSignature/") {
             plan.put(name, data, MODE_FILE);
         } else {
-            plan.put_stored(name, data, MODE_EXEC);
+            plan.put(name, data, MODE_EXEC);
         }
     }
 

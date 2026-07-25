@@ -52,7 +52,7 @@ fn decoded_asset(car: &[u8], name: &str) -> Vec<u8> {
 fn ipa_with_car(car: &[u8]) -> Vec<u8> {
     let (base, _) = common::build_ipa(&common::incompressible_blob(2048));
     let mut plan = EditPlan::new();
-    plan.put_stored("Payload/Fake.app/Assets.car", car.to_vec(), 0o100644);
+    plan.put("Payload/Fake.app/Assets.car", car.to_vec(), 0o100644);
     plan.commit_append(&base).unwrap()
 }
 
