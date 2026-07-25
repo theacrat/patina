@@ -1,0 +1,54 @@
+[package]
+name = "patina"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+description = "Surgical, recompression-free edits on iOS .ipa archives — rename, icons, Assets.car merge, dylib injection, ad-hoc re-signing. Pure Rust."
+
+[lib]
+name = "patina"
+path = "src/lib.rs"
+
+[[bin]]
+name = "patina"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+binrw = "0.15"
+clap = { version = "4", features = ["derive"] }
+zip = { version = "8", default-features = false, features = ["deflate", "time"] }
+plist = "1"
+goblin = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+scar = { git = "https://github.com/theacrat/scar", tag = "v0.2.2" }
+# .deb unpacking — all pure Rust (no C/C++): ar + tar, gzip via miniz_oxide,
+# xz/lzma via lzma-rs, zstd via ruzstd.
+ar = "0.9"
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+lzma-rs = "0.3"
+ruzstd = { version = "0.7", default-features = false, features = ["std"] }
+regex = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[dev-dependencies]
+zip = { version = "8", default-features = false, features = ["deflate", "time"] }
+plist = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+goblin = "0.10"
+apple-codesign = { version = "0.29", default-features = false }
+scar = { git = "https://github.com/theacrat/scar", tag = "v0.2.2" }
+tempfile = "3"
+ar = "0.9"
+tar = { version = "0.4", default-features = false }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[profile.release]
+strip = true
+lto = "thin"
