@@ -136,7 +136,7 @@ The command line wins over the bundle, and repeatable options add to it rather t
 
 ## Signing and installing
 
-patina re-signs whenever it changes the executable — enough for **AltStore** and **Sideloadly**, which re-sign with your own certificate anyway. **TrollStore** relies on the app's own signature, so add `--fakesign-bundle` to sign the whole bundle; it reads every file in the app, so it's off by default.
+patina re-signs whenever it changes the executable — enough for **AltStore** and **Sideloadly**, which re-sign with your own certificate anyway. **AppSync** relies on the app's own signature, so add `--fakesign-bundle` to sign the whole bundle; it reads every file in the app, so it's off by default.
 
 ## Development
 
