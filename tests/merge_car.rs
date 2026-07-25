@@ -197,6 +197,32 @@ fn merge_car_replaces_svg_asset_in_ipa() {
 }
 
 #[test]
+fn merge_car_adds_a_new_svg_asset_to_ipa() {
+    let svg = r##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#123456"/></svg>"##;
+    let car = sample_car();
+    let ipa = ipa_with_car(&car);
+
+    let logo_before = decoded_asset(&car, "logo");
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("fresh.svg"), svg).unwrap();
+
+    let opts = EditOptions {
+        merge_car: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let (edited, report) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
+    assert_eq!(report.car_replaced, 0);
+    assert_eq!(report.car_added, vec!["fresh".to_string()]);
+    assert!(report.car_unmatched.is_empty());
+
+    let merged = patina::archive::read_entry(&edited, "Payload/Fake.app/Assets.car")
+        .unwrap()
+        .unwrap();
+    assert_eq!(data_asset(&merged, "fresh"), svg.as_bytes());
+    assert_eq!(decoded_asset(&merged, "logo"), logo_before);
+}
+
+#[test]
 fn merge_car_reports_unmatched_and_leaves_car_untouched() {
     let car = sample_car();
     let ipa = ipa_with_car(&car);

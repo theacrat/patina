@@ -44,7 +44,8 @@ struct EditArgs {
     #[arg(long, value_name = "PNG")]
     icon: Option<PathBuf>,
 
-    /// Merge replacement PNGs/SVGs/PDFs from a directory into the app's Assets.car.
+    /// Merge PNGs/SVGs/PDFs from a directory into the app's Assets.car;
+    /// SVGs/PDFs naming no existing asset are added.
     #[arg(long = "merge-car", value_name = "DIR")]
     merge_car: Option<PathBuf>,
 
@@ -225,8 +226,11 @@ fn print_report(r: &EditReport, compact: bool, target: &std::path::Path) {
     if let Some(n) = r.fakesigned {
         println!("  fakesigned bundle: {n} Mach-Os signed + CodeResources");
     }
-    if r.car_replaced > 0 || !r.car_unmatched.is_empty() {
+    if r.car_replaced > 0 || !r.car_added.is_empty() || !r.car_unmatched.is_empty() {
         println!("  car merge: {} replaced", r.car_replaced);
+        if !r.car_added.is_empty() {
+            println!("    added: {}", r.car_added.join(", "));
+        }
         if !r.car_unmatched.is_empty() {
             println!("    unmatched: {}", r.car_unmatched.join(", "));
         }

@@ -59,6 +59,7 @@ pub struct EditReport {
     pub alt_icons: usize,
     pub primary_icon: bool,
     pub car_replaced: usize,
+    pub car_added: Vec<String>,
     pub car_unmatched: Vec<String>,
     pub overlaid_files: usize,
     pub tweaks: Vec<String>,
@@ -532,10 +533,11 @@ pub fn plan_edits<R: Read + Seek>(
         }
         let car = current_bytes(&staged, archive, &car_name)?;
         let (merged, m) = merge::merge_car_dir(&car, dir)?;
-        if m.replaced > 0 {
+        if m.replaced > 0 || !m.added.is_empty() {
             plan.put(car_name, merged, MODE_FILE);
         }
         report.car_replaced = m.replaced;
+        report.car_added = m.added;
         report.car_unmatched = m.unmatched;
     }
 
