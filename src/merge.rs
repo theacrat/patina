@@ -1,5 +1,5 @@
-//! `Assets.car` merge glue over scar's `merge_car`: each `<name>.png` replaces
-//! asset `<name>`.
+//! `Assets.car` merge glue over scar's `merge_car`: each `<name>.png`,
+//! `<name>.svg` or `<name>.pdf` replaces asset `<name>`.
 
 use std::path::Path;
 
@@ -16,11 +16,12 @@ pub fn merge_car_dir(car_bytes: &[u8], dir: &Path) -> Result<(Vec<u8>, CarMerge)
         .with_context(|| format!("reading merge-car dir {}", dir.display()))?
     {
         let path = entry?.path();
-        let is_png = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("png"));
-        if !is_png {
+        let supported = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            ["png", "svg", "pdf"]
+                .iter()
+                .any(|s| e.eq_ignore_ascii_case(s))
+        });
+        if !supported {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {

@@ -3,10 +3,12 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use patina::archive::EditPlan;
 use patina::edit::{EditOptions, WriteMode, edit_bytes};
 use scar::codec::{self, Pixels};
-use scar::manifest::{Content, Manifest};
+use scar::manifest::{Content, Facet, Manifest, Rendition};
 
 fn solid(w: u32, h: u32, color: [u8; 4]) -> Pixels {
     Pixels {
@@ -27,6 +29,69 @@ fn sample_car() -> Vec<u8> {
     scar::authoring::pack(&input, &packed, &scar::authoring::PackOptions::default()).unwrap();
     scar::compile::compile(&packed, &car).unwrap();
     std::fs::read(&car).unwrap()
+}
+
+/// `sample_car()`'s logo plus an SVG data rendition for asset `glyph`.
+fn sample_car_with_svg(svg: &str) -> Vec<u8> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let input = tmp.path().join("in");
+    let packed = tmp.path().join("packed");
+    let car = tmp.path().join("out.car");
+    std::fs::create_dir_all(&input).unwrap();
+    codec::write_png(&input.join("logo.png"), &solid(24, 24, [10, 120, 240, 255])).unwrap();
+    scar::authoring::pack(&input, &packed, &scar::authoring::PackOptions::default()).unwrap();
+
+    std::fs::create_dir_all(packed.join("data")).unwrap();
+    std::fs::write(packed.join("data/glyph.svg"), svg).unwrap();
+    let manifest_path = packed.join("manifest.json");
+    let mut m = Manifest::load(&manifest_path).unwrap();
+    let attrs: BTreeMap<String, u16> =
+        [("element".to_string(), 2), ("identifier".to_string(), 2)].into();
+    m.renditions.push(Rendition {
+        key: attrs.clone(),
+        name: "glyph.svg".to_string(),
+        layout: 1017,
+        flags: 0,
+        pixel_format: "SVG".to_string(),
+        color_space_id: 0,
+        width: 0,
+        height: 0,
+        scale: 100,
+        modified: 0,
+        slices: None,
+        metrics: None,
+        composition: None,
+        bitmap_info: Some(1),
+        extra_tlvs: BTreeMap::new(),
+        content: Content::Data {
+            file: "data/glyph.svg".to_string(),
+            lzfse: false,
+        },
+    });
+    m.facets.push(Facet {
+        name: "glyph".to_string(),
+        hotspot: None,
+        attributes: attrs,
+    });
+    m.save(&manifest_path).unwrap();
+    scar::compile::compile(&packed, &car).unwrap();
+    std::fs::read(&car).unwrap()
+}
+
+/// Raw bytes of the data rendition named `<name>.svg`.
+fn data_asset(car: &[u8], name: &str) -> Vec<u8> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let in_car = tmp.path().join("in.car");
+    let work = tmp.path().join("work");
+    std::fs::write(&in_car, car).unwrap();
+    scar::decompile::decompile(&in_car, &work, false).unwrap();
+    let m = Manifest::load(&work.join("manifest.json")).unwrap();
+    let want = format!("{name}.svg");
+    let r = m.renditions.iter().find(|r| r.name == want).unwrap();
+    let Content::Data { file, .. } = &r.content else {
+        panic!("expected data rendition")
+    };
+    std::fs::read(work.join(file)).unwrap()
 }
 
 fn decoded_asset(car: &[u8], name: &str) -> Vec<u8> {
@@ -103,6 +168,32 @@ fn merge_car_replaces_named_asset_in_ipa() {
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn merge_car_replaces_svg_asset_in_ipa() {
+    let old_svg = r##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#123456"/></svg>"##;
+    let new_svg = r##"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><circle cx="4" cy="4" r="4" fill="#654321"/></svg>"##;
+    let car = sample_car_with_svg(old_svg);
+    let ipa = ipa_with_car(&car);
+
+    let logo_before = decoded_asset(&car, "logo");
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("glyph.svg"), new_svg).unwrap();
+
+    let opts = EditOptions {
+        merge_car: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let (edited, report) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
+    assert_eq!(report.car_replaced, 1, "one rendition should be replaced");
+    assert!(report.car_unmatched.is_empty());
+
+    let merged = patina::archive::read_entry(&edited, "Payload/Fake.app/Assets.car")
+        .unwrap()
+        .unwrap();
+    assert_eq!(data_asset(&merged, "glyph"), new_svg.as_bytes());
+    assert_eq!(decoded_asset(&merged, "logo"), logo_before);
 }
 
 #[test]

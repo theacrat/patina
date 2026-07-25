@@ -35,7 +35,7 @@ Everything below can be combined in one command; `patina edit --help` has the fu
 | `--name NAME`              | Change the app's display name                            |
 | `--icon icon.png`          | Replace the app icon                                     |
 | `--alt-icon NAME=icon.png` | Add an alternate icon the app can switch to (repeatable) |
-| `--merge-car DIR`          | Swap individual images inside the app's asset catalogue  |
+| `--merge-car DIR`          | Swap assets (PNG/SVG/PDF) inside the app's asset catalogue |
 | `--bundle-id ID`           | Change the bundle identifier                             |
 | `--version VER`            | Change the version number                                |
 

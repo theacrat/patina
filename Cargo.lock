@@ -1012,7 +1012,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2322,7 +2322,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2620,7 +2620,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2724,8 +2724,8 @@ dependencies = [
 
 [[package]]
 name = "scar"
-version = "0.2.2"
-source = "git+https://github.com/theacrat/scar?tag=v0.2.2#d952567374b9954442bd3e227e8b1cbd77e9f04b"
+version = "0.3.0"
+source = "git+https://github.com/theacrat/scar?tag=v0.3.0#60bda8fff5aae57bcf3af431004f7095d34f521b"
 dependencies = [
  "anyhow",
  "base64",
@@ -3151,7 +3151,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

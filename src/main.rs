@@ -44,7 +44,7 @@ struct EditArgs {
     #[arg(long, value_name = "PNG")]
     icon: Option<PathBuf>,
 
-    /// Merge replacement PNGs from a directory into the app's Assets.car.
+    /// Merge replacement PNGs/SVGs/PDFs from a directory into the app's Assets.car.
     #[arg(long = "merge-car", value_name = "DIR")]
     merge_car: Option<PathBuf>,
 
