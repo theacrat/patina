@@ -61,7 +61,7 @@ Tweaks are supplied as `.deb`, the format they ship in and what theos builds. Ro
 | `Library/Frameworks`                       | Staged alongside  |
 | `Library/Application Support/*.bundle`     | The app root      |
 
-Symlinked aliases become real files. Anything only a jailbroken device can load — preference bundles, themes, daemons — is reported and skipped.
+Symlinked aliases become real files. A staged framework that ships no `Info.plist` — ElleKit's `CydiaSubstrate` shim, for one — gets one generated from the package's control fields, since signing needs it. Anything only a jailbroken device can load — preference bundles, themes, daemons — is reported and skipped.
 
 **Settings and compatibility**
 

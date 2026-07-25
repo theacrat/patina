@@ -230,6 +230,8 @@ fn control_file(tar_bytes: &[u8]) -> Result<Option<String>> {
 #[derive(Debug, Default)]
 pub struct Control {
     pub package: String,
+    /// Human-readable `Name:` field, as tweak repos ship it.
+    pub name: Option<String>,
     pub version: Option<String>,
     /// Virtual names this package also answers to, constraints stripped.
     pub provides: Vec<String>,
@@ -265,6 +267,7 @@ pub fn parse_control(text: &str) -> Result<Control> {
         .context("control file has no Package: field")?;
     Ok(Control {
         package: package.clone(),
+        name: fields.get("name").cloned(),
         version: fields.get("version").cloned(),
         provides: fields
             .get("provides")
@@ -717,6 +720,7 @@ mod tests {
     #[test]
     fn parses_a_control_stanza() {
         let text = "Package: ws.hbang.common\n\
+                    Name: Cephei\n\
                     Version: 2.0\n\
                     Depends: mobilesubstrate,\n \
                     firmware (<< 8.0) | firmware (>= 11.0) | com.rpetrich.rocketbootstrap,\n \
@@ -727,6 +731,7 @@ mod tests {
                     continued prose\n";
         let c = parse_control(text).unwrap();
         assert_eq!(c.package, "ws.hbang.common");
+        assert_eq!(c.name.as_deref(), Some("Cephei"));
         assert_eq!(c.version.as_deref(), Some("2.0"));
         assert_eq!(c.provides, ["mobilesubstrate", "org.coolstar.libhooker"]);
         assert_eq!(c.conflicts, ["com.den.twigalaxy", "xyz.cypwn.twigalaxy"]);

@@ -235,7 +235,13 @@ fn stage_deb(name: &str, deb_bytes: &[u8]) -> Result<Staged> {
     let mut out = Staged::empty(name);
     let framework_count = frameworks.len();
     let bundle_count = bundles.len();
-    for (fw_name, files) in frameworks {
+    for (fw_name, mut files) in frameworks {
+        // Some framework debs (ellekit's CydiaSubstrate shim, for one) ship no
+        // Info.plist, which bundle signing needs.
+        if !files.iter().any(|(rel, _)| rel == "Info.plist") {
+            let info = framework_info_plist(&fw_name, &files, control.as_ref())?;
+            files.push(("Info.plist".to_owned(), info));
+        }
         let dest = format!("Frameworks/{fw_name}/");
         // Providers, not tweaks: whoever needs one links it.
         out.merge(stage_container(&fw_name, &dest, files, false)?);
@@ -277,6 +283,47 @@ fn stage_deb(name: &str, deb_bytes: &[u8]) -> Result<Staged> {
     );
     out.control = control;
     Ok(out)
+}
+
+fn framework_info_plist(
+    fw_name: &str,
+    files: &[(String, Vec<u8>)],
+    control: Option<&deb::Control>,
+) -> Result<Vec<u8>> {
+    let stem = fw_name.rsplit_once('.').map_or(fw_name, |(s, _)| s);
+    let package = control.map_or(stem, |c| c.package.as_str());
+    let display = control.and_then(|c| c.name.as_deref()).unwrap_or(package);
+    let version = bundle_version(control.and_then(|c| c.version.as_deref()));
+
+    let mut d = plist::Dictionary::new();
+    // A resource-only framework has no executable to name.
+    if files.iter().any(|(rel, _)| rel == stem) {
+        d.insert("CFBundleExecutable".into(), stem.into());
+    }
+    d.insert("CFBundleIdentifier".into(), package.into());
+    d.insert("CFBundleName".into(), display.into());
+    d.insert("CFBundleShortVersionString".into(), version.as_str().into());
+    d.insert("CFBundleVersion".into(), version.as_str().into());
+    d.insert(
+        "UIRequiredDeviceCapabilities".into(),
+        plist::Value::Array(vec!["arm64".into()]),
+    );
+    let mut out = Vec::new();
+    plist::to_writer_binary(&mut out, &plist::Value::Dictionary(d))
+        .with_context(|| format!("encoding generated Info.plist for {fw_name}"))?;
+    Ok(out)
+}
+
+/// Debian `epoch:upstream-revision` → the digits-and-dots CFBundleVersion wants.
+fn bundle_version(deb_version: Option<&str>) -> String {
+    let v = deb_version.unwrap_or("1.0");
+    let v = v.split_once(':').map_or(v, |(_, rest)| rest);
+    let v = v.rsplit_once('-').map_or(v, |(upstream, _)| upstream);
+    let end = v
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(v.len());
+    let v = v[..end].trim_matches('.');
+    if v.is_empty() { "1.0".into() } else { v.into() }
 }
 
 /// The pseudo-packages Cydia's `firmware.sh` fabricates and Sileo/Zebra follow:
@@ -561,6 +608,49 @@ mod tests {
             libs.iter().any(|l| l == "@rpath/Foo.framework/Foo"),
             "{libs:?}"
         );
+    }
+
+    #[test]
+    fn sanitises_deb_versions() {
+        assert_eq!(bundle_version(None), "1.0");
+        assert_eq!(bundle_version(Some("1.1.3")), "1.1.3");
+        assert_eq!(bundle_version(Some("0.6.3-1")), "0.6.3");
+        assert_eq!(bundle_version(Some("2:1.2~beta1")), "1.2");
+        assert_eq!(bundle_version(Some("~junk")), "1.0");
+    }
+
+    #[test]
+    fn generates_a_framework_info_plist_from_control() {
+        let control = deb::parse_control(
+            "Package: ellekit\nName: ElleKit\nVersion: 1.1.3-1\n",
+        )
+        .unwrap();
+        let files = [("CydiaSubstrate".to_owned(), b"MACHO".to_vec())];
+        let out =
+            framework_info_plist("CydiaSubstrate.framework", &files, Some(&control)).unwrap();
+        let v = plist::Value::from_reader(std::io::Cursor::new(&out)).unwrap();
+        let d = v.as_dictionary().unwrap();
+        assert_eq!(d["CFBundleExecutable"].as_string(), Some("CydiaSubstrate"));
+        assert_eq!(d["CFBundleIdentifier"].as_string(), Some("ellekit"));
+        assert_eq!(d["CFBundleName"].as_string(), Some("ElleKit"));
+        assert_eq!(d["CFBundleShortVersionString"].as_string(), Some("1.1.3"));
+        assert_eq!(d["CFBundleVersion"].as_string(), Some("1.1.3"));
+        let caps = d["UIRequiredDeviceCapabilities"].as_array().unwrap();
+        assert_eq!(caps[0].as_string(), Some("arm64"));
+    }
+
+    #[test]
+    fn generated_info_plist_falls_back_without_control() {
+        let out = framework_info_plist("Hook.framework", &[], None).unwrap();
+        let v = plist::Value::from_reader(std::io::Cursor::new(&out)).unwrap();
+        let d = v.as_dictionary().unwrap();
+        assert!(
+            !d.contains_key("CFBundleExecutable"),
+            "no binary staged, so no executable claimed"
+        );
+        assert_eq!(d["CFBundleIdentifier"].as_string(), Some("Hook"));
+        assert_eq!(d["CFBundleName"].as_string(), Some("Hook"));
+        assert_eq!(d["CFBundleVersion"].as_string(), Some("1.0"));
     }
 
     const BHTWITTER: &str = "Package: com.bandarhl.bhtwitter\n\

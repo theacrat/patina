@@ -738,6 +738,43 @@ fn overlay_beats_a_colliding_tweak_file() {
 }
 
 #[test]
+fn a_framework_without_an_info_plist_gets_one_from_the_control() {
+    let Some(dylib) = common::fixture("libinject.dylib") else {
+        eprintln!("skipping: fixtures absent");
+        return;
+    };
+    let (ipa, _) = common::build_ipa(&common::fixture("main_arm64").unwrap());
+    let dir = common::tempdir();
+    let deb = deb_with_control(
+        &dir,
+        "ellekit.deb",
+        "Package: ellekit\nName: ElleKit\nVersion: 1.1.3-1\n",
+        &[(
+            "Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate",
+            &dylib,
+        )],
+    );
+
+    let opts = EditOptions {
+        tweaks: vec![deb],
+        deterministic: true,
+        ..Default::default()
+    };
+    let (edited, _) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
+
+    let info = read_entry(
+        &edited,
+        "Payload/Fake.app/Frameworks/CydiaSubstrate.framework/Info.plist",
+    );
+    let v = plist::Value::from_reader(Cursor::new(&info)).unwrap();
+    let d = v.as_dictionary().unwrap();
+    assert_eq!(d["CFBundleExecutable"].as_string(), Some("CydiaSubstrate"));
+    assert_eq!(d["CFBundleIdentifier"].as_string(), Some("ellekit"));
+    assert_eq!(d["CFBundleName"].as_string(), Some("ElleKit"));
+    assert_eq!(d["CFBundleShortVersionString"].as_string(), Some("1.1.3"));
+}
+
+#[test]
 fn an_overlaid_dylib_is_adhoc_signed() {
     let Some(dylib) = common::fixture("libinject.dylib") else {
         eprintln!("skipping: fixtures absent");
