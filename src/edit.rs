@@ -454,6 +454,12 @@ pub fn plan_edits<R: Read + Seek>(
         info_dirty = true;
     }
 
+    // Car replacements from every source, applied in ONE scar round-trip:
+    // each merge is a full decompile+compile of the catalogue.
+    let car_name = format!("{app_dir}Assets.car");
+    let mut car_replacements: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut icon_asset = None;
+
     if let Some(src) = &opts.icon {
         let src_png = std::fs::read(src)
             .with_context(|| format!("reading --icon source {}", src.display()))?;
@@ -465,21 +471,12 @@ pub fn plan_edits<R: Read + Seek>(
         info_dirty = true;
         report.primary_icon = true;
 
-        let car_name = format!("{app_dir}Assets.car");
         if names.iter().any(|n| n == &car_name) || staged.contains_key(&car_name) {
-            let car = current_bytes(&staged, archive, &car_name)?;
-            // scar matches renditions on exact dimensions, so replace per size.
-            let sized: Vec<(String, Vec<u8>)> = icons::render_sizes(&src_png, icons::ICON_SIZES)?
-                .into_iter()
-                .map(|(_, png)| (asset.clone(), png))
-                .collect();
-            let (merged, m) = merge::merge_car_replacements(&car, &sized)?;
-            if m.replaced > 0 {
-                // Staged so a following --merge-car composes on top.
-                staged.insert(car_name.clone(), merged.clone());
-                plan.put(car_name, merged, MODE_FILE);
-                report.car_replaced += m.replaced;
+            // scar matches renditions on exact dimensions, so offer every size.
+            for (_, png) in icons::render_sizes(&src_png, icons::ICON_SIZES)? {
+                car_replacements.push((asset.clone(), png));
             }
+            icon_asset = Some(asset);
         }
     }
 
@@ -527,18 +524,27 @@ pub fn plan_edits<R: Read + Seek>(
     }
 
     if let Some(dir) = &opts.merge_car {
-        let car_name = format!("{app_dir}Assets.car");
         if !names.iter().any(|n| n == &car_name) && !staged.contains_key(&car_name) {
             bail!("--merge-car requested but {car_name} is not in the archive");
         }
+        // After the icon replacements, so these win overlapping renditions.
+        car_replacements.extend(merge::dir_replacements(dir)?);
+    }
+
+    if !car_replacements.is_empty() {
         let car = current_bytes(&staged, archive, &car_name)?;
-        let (merged, m) = merge::merge_car_dir(&car, dir)?;
+        let (merged, m) = merge::merge_car(&car, &car_replacements, opts.merge_car.is_some())?;
         if m.replaced > 0 || !m.added.is_empty() {
             plan.put(car_name, merged, MODE_FILE);
         }
         report.car_replaced = m.replaced;
         report.car_added = m.added;
-        report.car_unmatched = m.unmatched;
+        // Icon sizes the catalogue lacks are expected misses, not news.
+        report.car_unmatched = m
+            .unmatched
+            .into_iter()
+            .filter(|n| Some(n) != icon_asset.as_ref())
+            .collect();
     }
 
     // A package of only frameworks and resources leaves the executable alone.

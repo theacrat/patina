@@ -78,6 +78,71 @@ fn sample_car_with_svg(svg: &str) -> Vec<u8> {
     std::fs::read(&car).unwrap()
 }
 
+/// One asset `logo` carried by renditions of several different sizes, as
+/// shipping catalogs do (launch images, icons): 24x24 plus `extra`.
+fn multisize_car(extra: &[(u32, u32)]) -> Vec<u8> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let input = tmp.path().join("in");
+    let packed = tmp.path().join("packed");
+    let car = tmp.path().join("out.car");
+    std::fs::create_dir_all(&input).unwrap();
+    codec::write_png(&input.join("logo.png"), &solid(24, 24, [10, 120, 240, 255])).unwrap();
+    scar::authoring::pack(&input, &packed, &scar::authoring::PackOptions::default()).unwrap();
+
+    let manifest_path = packed.join("manifest.json");
+    let mut m = Manifest::load(&manifest_path).unwrap();
+    let base = m.renditions[0].clone();
+    for (i, &(w, h)) in extra.iter().enumerate() {
+        let file = format!("renditions/{:03}-logo.png", i + 1);
+        codec::write_png(&packed.join(&file), &solid(w, h, [10, 120, 240, 255])).unwrap();
+        let mut r = base.clone();
+        // Keys must differ; scale is the natural axis for a same-asset variant.
+        r.key.insert("scale".to_string(), i as u16 + 2);
+        r.width = w;
+        r.height = h;
+        r.content = Content::Image {
+            file,
+            compression: "lzfse".to_string(),
+            original: None,
+            edit_hash: None,
+        };
+        m.renditions.push(r);
+    }
+    m.save(&manifest_path).unwrap();
+    scar::compile::compile(&packed, &car).unwrap();
+    std::fs::read(&car).unwrap()
+}
+
+/// Every rendition of `name`, as (width, height, top-left pixel).
+fn rendition_pixels(car: &[u8], name: &str) -> Vec<(u32, u32, [u8; 4])> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let in_car = tmp.path().join("in.car");
+    let work = tmp.path().join("work");
+    std::fs::write(&in_car, car).unwrap();
+    scar::decompile::decompile(&in_car, &work, false).unwrap();
+    let m = Manifest::load(&work.join("manifest.json")).unwrap();
+    let ident = m
+        .facets
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap()
+        .attributes["identifier"];
+    let mut out = Vec::new();
+    for r in m
+        .renditions
+        .iter()
+        .filter(|r| r.key.get("identifier") == Some(&ident))
+    {
+        let Content::Image { file, .. } = &r.content else {
+            continue;
+        };
+        let px = codec::read_png(&work.join(file)).unwrap();
+        out.push((px.width, px.height, px.rgba[..4].try_into().unwrap()));
+    }
+    out.sort_by_key(|(w, h, _)| (*w, *h));
+    out
+}
+
 /// Raw bytes of the data rendition named `<name>.svg`.
 fn data_asset(car: &[u8], name: &str) -> Vec<u8> {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -226,8 +291,8 @@ fn merge_car_adds_a_new_svg_asset_to_ipa() {
 fn merge_car_reports_unmatched_and_leaves_car_untouched() {
     let car = sample_car();
     let ipa = ipa_with_car(&car);
-    // 10×10 cannot match `logo`'s 24×24 rendition.
-    let dir = write_replacement_dir(&solid(10, 10, [1, 2, 3, 255]), "logo");
+    // Size is no longer a barrier (see the size-fitting tests), a name is.
+    let dir = write_replacement_dir(&solid(10, 10, [1, 2, 3, 255]), "nosuchasset");
 
     let opts = EditOptions {
         merge_car: Some(dir.path().to_path_buf()),
@@ -235,7 +300,7 @@ fn merge_car_reports_unmatched_and_leaves_car_untouched() {
     };
     let (edited, report) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
     assert_eq!(report.car_replaced, 0);
-    assert_eq!(report.car_unmatched, vec!["logo".to_string()]);
+    assert_eq!(report.car_unmatched, vec!["nosuchasset".to_string()]);
 
     let before = patina::archive::read_entry(&ipa, "Payload/Fake.app/Assets.car")
         .unwrap()
@@ -286,5 +351,90 @@ fn merge_car_missing_car_is_an_error() {
     assert!(
         format!("{err:#}").contains("Assets.car"),
         "error should name the missing car"
+    );
+}
+
+/// The NeoFreeBird launch-image case: one supplied PNG, an asset carried by
+/// renditions at sizes it does not match. scar never resamples, so patina must
+/// render the replacement at each size or all but an exact match go unmatched.
+#[test]
+fn merge_car_fits_one_png_to_every_rendition_size() {
+    let extra = [(48, 48), (12, 11)];
+    let car = multisize_car(&extra);
+    let ipa = ipa_with_car(&car);
+
+    // 96x96 matches nothing in the catalogue.
+    let dir = write_replacement_dir(&solid(96, 96, [250, 30, 60, 255]), "logo");
+    let opts = EditOptions {
+        merge_car: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let (edited, report) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
+
+    assert_eq!(report.car_replaced, 3, "every size must be replaced");
+    assert!(
+        report.car_unmatched.is_empty(),
+        "nothing should be left over: {:?}",
+        report.car_unmatched
+    );
+
+    let merged = patina::archive::read_entry(&edited, "Payload/Fake.app/Assets.car")
+        .unwrap()
+        .unwrap();
+    let got = rendition_pixels(&merged, "logo");
+    assert_eq!(
+        got.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(),
+        vec![(12, 11), (24, 24), (48, 48)],
+        "the catalogue's own sizes must be preserved"
+    );
+    for (w, h, px) in got {
+        assert_eq!(px, [250, 30, 60, 255], "{w}x{h} must carry the new colour");
+    }
+}
+
+/// A supplied PNG that already matches a rendition must be installed as-is,
+/// never round-tripped through a resize.
+#[test]
+fn merge_car_uses_an_exact_size_png_unchanged() {
+    let car = multisize_car(&[(48, 48)]);
+    let ipa = ipa_with_car(&car);
+
+    // A gradient: resampling to 48x48 and back would not be a no-op.
+    let mut px = solid(48, 48, [0, 0, 0, 255]);
+    for y in 0..48u32 {
+        for x in 0..48u32 {
+            let i = ((y * 48 + x) * 4) as usize;
+            px.rgba[i] = (x * 5) as u8;
+            px.rgba[i + 1] = (y * 5) as u8;
+        }
+    }
+    let dir = write_replacement_dir(&px, "logo");
+    let opts = EditOptions {
+        merge_car: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let (edited, _) = edit_bytes(&ipa, &opts, WriteMode::Compact).unwrap();
+
+    let merged = patina::archive::read_entry(&edited, "Payload/Fake.app/Assets.car")
+        .unwrap()
+        .unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let in_car = tmp.path().join("in.car");
+    let work = tmp.path().join("work");
+    std::fs::write(&in_car, &merged).unwrap();
+    scar::decompile::decompile(&in_car, &work, false).unwrap();
+    let m = Manifest::load(&work.join("manifest.json")).unwrap();
+    let r = m
+        .renditions
+        .iter()
+        .find(|r| (r.width, r.height) == (48, 48))
+        .unwrap();
+    let Content::Image { file, .. } = &r.content else {
+        panic!("expected image rendition")
+    };
+    assert_eq!(
+        codec::read_png(&work.join(file)).unwrap().rgba,
+        px.rgba,
+        "an exactly-sized replacement must survive byte-for-byte"
     );
 }

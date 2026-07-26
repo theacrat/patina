@@ -32,18 +32,35 @@ const VARIANTS: [(&str, &str, u32, bool); 4] = [
 pub const ICON_SIZES: &[u32] = &[20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024];
 
 pub fn render_sizes(source_png: &[u8], sizes: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+    let square: Vec<(u32, u32)> = sizes.iter().map(|&px| (px, px)).collect();
+    Ok(render_exact(source_png, &square)?
+        .into_iter()
+        .map(|((w, _), png)| (w, png))
+        .collect())
+}
+
+/// `source_png` stretched to each of `sizes`, decoding it once.
+pub fn render_exact(source_png: &[u8], sizes: &[(u32, u32)]) -> Result<Vec<((u32, u32), Vec<u8>)>> {
     let img =
         image::load_from_memory(source_png).context("icon source is not a decodable image")?;
     let mut out = Vec::with_capacity(sizes.len());
-    for &px in sizes {
-        let resized = img.resize_exact(px, px, FilterType::Lanczos3);
+    for &(w, h) in sizes {
         let mut buf = Vec::new();
-        resized
-            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
-            .context("failed to encode icon PNG")?;
-        out.push((px, buf));
+        if (w, h) == (img.width(), img.height()) {
+            source_png.clone_into(&mut buf);
+        } else {
+            img.resize_exact(w, h, FilterType::Lanczos3)
+                .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+                .context("failed to encode resized PNG")?;
+        }
+        out.push(((w, h), buf));
     }
     Ok(out)
+}
+
+pub fn png_size(png: &[u8]) -> Result<(u32, u32)> {
+    let img = image::load_from_memory(png).context("replacement is not a decodable image")?;
+    Ok((img.width(), img.height()))
 }
 
 pub fn generate_alt_icon(name: &str, source_png: &[u8]) -> Result<AltIcon> {
