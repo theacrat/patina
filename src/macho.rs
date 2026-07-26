@@ -239,6 +239,12 @@ pub fn strip_code_signature(macho: &[u8]) -> Result<Vec<u8>> {
     apply(macho, &Op::StripCodeSignature)
 }
 
+/// A fat (multi-architecture) binary — the only kind [`thin_to_arm64`] rewrites.
+/// Decidable from the first four bytes, so callers can skip reading the rest.
+pub fn is_fat(buf: &[u8]) -> bool {
+    matches!(kind(buf), Kind::Fat32 | Kind::Fat64)
+}
+
 pub fn is_macho(buf: &[u8]) -> bool {
     matches!(
         kind(buf),

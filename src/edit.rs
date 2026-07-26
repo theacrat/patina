@@ -172,6 +172,31 @@ fn current_bytes<R: Read + Seek>(
     }
 }
 
+/// Up to `n` leading bytes of an entry, leaving the rest of it compressed.
+fn entry_head<R: Read + Seek>(
+    staged: &HashMap<String, Vec<u8>>,
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    n: usize,
+) -> Result<Vec<u8>> {
+    if let Some(bytes) = staged.get(name) {
+        return Ok(bytes[..n.min(bytes.len())].to_vec());
+    }
+    let mut f = archive
+        .by_name(name)
+        .with_context(|| format!("archive entry not found: {name}"))?;
+    let mut buf = vec![0u8; n];
+    let mut got = 0;
+    while got < n {
+        match f.read(&mut buf[got..])? {
+            0 => break,
+            k => got += k,
+        }
+    }
+    buf.truncate(got);
+    Ok(buf)
+}
+
 fn read_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>> {
     let mut f = archive
         .by_name(name)
@@ -332,6 +357,11 @@ pub fn plan_edits<R: Read + Seek>(
         for n in &targets {
             // Thinning a removal-scheduled subtree would resurrect it.
             if report.removed.iter().any(|p| n.starts_with(p)) {
+                continue;
+            }
+            // Only fat binaries thin, and the magic says so: decompressing every
+            // entry of a large archive to learn otherwise dominates this pass.
+            if !macho::is_fat(&entry_head(&staged, archive, n, 4)?) {
                 continue;
             }
             let data = current_bytes(&staged, archive, n)?;
